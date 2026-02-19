@@ -139,6 +139,12 @@ export default function Home() {
     setStep(null);
   }, []);
 
+  const handleLogout = useCallback(() => {
+    sessionStorage.removeItem("auth_username");
+    sessionStorage.removeItem("auth_password");
+    setAuthenticated(false);
+  }, []);
+
   if (authChecking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -163,7 +169,17 @@ export default function Home() {
           </div>
           <span className="text-lg font-bold text-gray-900">Resume Tailor</span>
         </div>
-        <span className="text-xs text-gray-400">LLM + LaTeX powered</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-400">LLM + LaTeX powered</span>
+          {sessionStorage.getItem("auth_username") && (
+            <button
+              onClick={handleLogout}
+              className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+            >
+              Sign out
+            </button>
+          )}
+        </div>
       </header>
 
       {/* Panels — stacks vertically on mobile */}

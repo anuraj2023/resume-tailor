@@ -18,6 +18,7 @@ out/
 .env
 .env.*
 .env*.local
+!.env.example
 
 # ── LaTeX output ──────────────────────────────────────────────────────
 backend/output/*.pdf

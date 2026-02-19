@@ -104,6 +104,8 @@ cp .env.example .env
 | `GOOGLE_AI_API_KEY` | No | — | Gemini fallback (used if OpenAI fails 5 consecutive times) |
 | `LLM_MODEL` | No | `gpt-4o-mini` | OpenAI model to use |
 | `ALLOWED_ORIGINS` | No | `http://localhost:3000,http://localhost:3001` | CORS origins (comma-separated) |
+| `AUTH_USERNAME` | No | — | UI auth gate username (empty = auth disabled) |
+| `AUTH_PASSWORD` | No | — | UI auth gate password |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
 
 > **Note:** `OPENAI_API_KEY` is the only required key. Without Langfuse keys, the app uses embedded fallback prompts and works normally — you just won't have prompt versioning or LLM tracing. Without `GOOGLE_AI_API_KEY`, there's no Gemini fallback if OpenAI is down.
@@ -199,6 +201,7 @@ curl -X POST http://localhost:8001/api/tailor \
 
 | Code | Cause |
 |------|-------|
+| 401 | Invalid credentials (auth gate enabled, wrong username/password) |
 | 400 | Non-.tex file, non-UTF-8, file too small, invalid content-type |
 | 413 | File too large (max 5 MB) |
 | 422 | Missing required field, JD too short |
@@ -249,6 +252,24 @@ data: {"detail": "Resume analysis failed", "step": 0}
 
 **Error responses** (before stream opens): Same as `/api/tailor` (400, 413, 422, 429).
 
+### `POST /api/auth/verify`
+
+Lightweight credential check for the frontend login gate. No body required — credentials are sent via headers.
+
+**Request headers:**
+
+| Header | Description |
+|--------|-------------|
+| `X-Auth-Username` | Username to verify |
+| `X-Auth-Password` | Password to verify |
+
+**Response:**
+```json
+{"valid": true, "auth_enabled": true}
+```
+
+If `AUTH_USERNAME` is empty (auth disabled): `{"valid": true, "auth_enabled": false}`.
+
 ### `GET /api/health`
 
 ```json
@@ -263,7 +284,7 @@ backend/
 │   ├── main.py              App setup, CORS, static files
 │   ├── config.py            Pydantic Settings (env vars)
 │   ├── models.py            Pydantic schemas + ResumeSections TypedDict
-│   ├── middleware.py         Rate limiter + request-ID middleware
+│   ├── middleware.py         Request-ID + password gate middleware
 │   │
 │   ├── core/
 │   │   ├── constants.py     Magic numbers (limits, timeouts, sizes)
@@ -273,7 +294,7 @@ backend/
 │   │
 │   ├── routes/
 │   │   ├── tailor.py        POST /api/tailor + /api/tailor-stream (SSE)
-│   │   └── health.py        GET /api/health
+│   │   └── health.py        GET /api/health + POST /api/auth/verify
 │   │
 │   ├── services/
 │   │   ├── resume_analyzer.py  Step 0: LLM extracts skills (cached by SHA-256)
@@ -434,13 +455,14 @@ python -m pytest tests/ -v
 | `test_stream_endpoint.py` | `/api/tailor-stream`: SSE validation, progress events, complete event, error events, PDF failure | 14 |
 | `test_services.py` | Services: extractor, matcher, analyzer with mocked LLM (success, failure, edge cases) | 23 |
 | `test_routes.py` | Route-level: content-type validation, CORS headers, file size, encoding checks | 12 |
-| `test_middleware.py` | Rate limiter bypass, request-ID propagation | 4 |
+| `test_middleware.py` | Rate limiter bypass, request-ID propagation, password gate middleware | 4 |
 
 All LLM-dependent tests use `unittest.mock` — no real API calls. Rate limiting is auto-disabled via `conftest.py`.
 
 ## Security
 
-- **CORS**: Restricted to explicit origins (`ALLOWED_ORIGINS`), explicit headers (`Content-Type`, `Authorization`, `X-Request-ID`)
+- **Auth gate**: Optional username + password middleware (`PasswordGateMiddleware`). Protects `/api/tailor*` endpoints. Disabled when `AUTH_USERNAME` is empty. Credentials sent via `X-Auth-Username` + `X-Auth-Password` headers
+- **CORS**: Restricted to explicit origins (`ALLOWED_ORIGINS`), explicit headers (`Content-Type`, `Authorization`, `X-Request-ID`, `X-Auth-Username`, `X-Auth-Password`)
 - **Content-type validation**: Upload endpoint rejects non-LaTeX MIME types before processing
 - **Rate limiting**: 10 requests/minute per IP (sliding window, auto-disabled in tests)
 - **File validation**: Size limits (min 50B, max 5MB), `.tex` extension check, UTF-8 encoding check

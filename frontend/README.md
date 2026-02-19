@@ -37,7 +37,7 @@ Open http://localhost:3000
 
 ### Verify
 
-1. Open http://localhost:3000 — you should see a two-panel layout (input on left, results on right)
+1. Open http://localhost:3000 — if auth is enabled (`AUTH_USERNAME` set on backend), you'll see a login form. Otherwise, you'll see the main layout directly.
 2. The file upload zone should say "Drop .tex file here"
 3. The submit button should be disabled (both file and JD are required)
 
@@ -116,11 +116,12 @@ frontend/
 ├── src/
 │   ├── app/
 │   │   ├── layout.tsx            Root layout (Inter font, OG meta, favicon)
-│   │   ├── page.tsx              Main page — two-panel split
+│   │   ├── page.tsx              Main page — auth gate + two-panel split
 │   │   └── globals.css           Tailwind imports
 │   │
 │   ├── components/
 │   │   ├── jd-input-panel.tsx    File upload + JD textarea + metadata + custom instructions (memo'd)
+│   │   ├── password-gate.tsx     Login form (username + password, sessionStorage)
 │   │   ├── results-panel.tsx     Composes all result sub-components + refine flow
 │   │   ├── match-score.tsx       SVG circular progress ring (accessible)
 │   │   ├── keyword-chips.tsx     Matched/missing/injectable chips (semantic <ul>/<li>)
@@ -157,6 +158,17 @@ frontend/
 ```
 
 ## Components
+
+### `password-gate.tsx`
+
+Full-screen login form shown when auth is enabled on the backend (`AUTH_USERNAME` + `AUTH_PASSWORD` set):
+- **Username + password inputs** with "Sign In" button
+- Calls `POST /api/auth/verify` with `X-Auth-Username` + `X-Auth-Password` headers
+- On success: stores credentials in `sessionStorage` (`auth_username`, `auth_password`)
+- If `auth_enabled: false` from the verify response: auto-proceeds without showing the form
+- Shows "Invalid username or password" or "Cannot reach server" errors
+
+After signing in, a **Sign out** link appears in the header. Clicking it clears `sessionStorage` and returns to the login form. Credentials are automatically cleared when the browser tab is closed (sessionStorage behavior).
 
 ### `jd-input-panel.tsx`
 
@@ -232,6 +244,7 @@ Since Steps 0 (resume analysis) and 1 (JD extraction) are cached, refinement run
 **`tailorResume()`** (legacy) — POSTs FormData to `/api/tailor`, returns the full JSON response at once.
 
 Both share the same features:
+- **Auth headers**: `X-Auth-Username` + `X-Auth-Password` from `sessionStorage` (via `getAuthHeaders()`)
 - **Timeout**: 2-minute timeout with deterministic detection (flag set before abort)
 - **Abort**: Caller can pass an `AbortSignal` for cancellation (forwarded to internal controller)
 - **Error handling**: Distinguishes timeout vs user cancellation vs network errors vs API errors

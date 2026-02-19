@@ -47,7 +47,7 @@ resume-tailor/
 ├── backend/               Python FastAPI (port 8001)
 │   ├── app/
 │   │   ├── main.py                  FastAPI app, middleware, exception handlers
-│   │   ├── middleware.py            Request ID middleware (contextvars)
+│   │   ├── middleware.py            Request ID + password gate middleware
 │   │   ├── config.py                Pydantic settings from .env
 │   │   ├── models.py                Pydantic schemas + ResumeSections TypedDict
 │   │   ├── core/
@@ -68,7 +68,7 @@ resume-tailor/
 │   │   │   └── writer.py           Write modified .tex sections + LaTeX escaping
 │   │   └── routes/
 │   │       ├── tailor.py            POST /api/tailor + /api/tailor-stream (SSE)
-│   │       └── health.py            GET /api/health (version + uptime)
+│   │       └── health.py            GET /api/health + POST /api/auth/verify
 │   ├── tests/                       207 tests (pytest + pytest-asyncio)
 │   ├── scripts/
 │   │   └── push_prompts.py          Push/update prompts in Langfuse
@@ -88,6 +88,7 @@ resume-tailor/
 │       │   └── page.tsx             Two-panel layout (input | results)
 │       ├── components/
 │       │   ├── jd-input-panel.tsx   File upload + JD textarea + metadata + custom instructions (memo'd)
+│       │   ├── password-gate.tsx    Login form (username + password, sessionStorage)
 │       │   ├── results-panel.tsx    Composes all result components + refine flow
 │       │   ├── match-score.tsx      SVG circular progress ring
 │       │   ├── keyword-chips.tsx    Matched/missing/injectable chips
@@ -127,7 +128,8 @@ resume-tailor/
 | **Observability** | Structured JSON + colored console logging with request_id, Langfuse LLM tracing, health check with version + uptime |
 | **Caching** | In-memory SHA-256 caching for resume analysis (max 20) and JD extraction (max 50). Re-runs with same inputs skip LLM calls entirely |
 | **Resilience** | Embedded fallback prompts when Langfuse is down, OpenAI → Gemini LLM failover, graceful PDF compilation failure |
-| **Security** | CORS with explicit headers (`Content-Type`, `Authorization`, `X-Request-ID`), rate limiting (10 req/min per IP), content-type validation on uploads, input validation (size, encoding, length), frontend security headers (X-Frame-Options, X-Content-Type-Options, etc.) |
+| **Auth** | Optional username + password gate (env-configured). ASGI middleware protects `/api/tailor*` endpoints. Frontend stores credentials in `sessionStorage` with sign-out support |
+| **Security** | CORS with explicit headers (`Content-Type`, `Authorization`, `X-Request-ID`, `X-Auth-*`), rate limiting (10 req/min per IP), content-type validation on uploads, input validation (size, encoding, length), frontend security headers (X-Frame-Options, X-Content-Type-Options, etc.) |
 | **Deployment** | Docker for both services (backend: non-root + HEALTHCHECK, frontend: multi-stage standalone), docker-compose orchestration, separated prod/dev requirements |
 | **CI/CD** | GitHub Actions: backend tests + coverage (70% min), frontend tests + lint + build, Docker build |
 | **Testing** | 207 backend tests + 39 frontend tests (246 total), async mock patterns, coverage enforcement |
@@ -158,6 +160,8 @@ All env vars are configured in `backend/.env`. Only `OPENAI_API_KEY` is required
 | `ALLOWED_ORIGINS` | No | `localhost:3000,3001` | CORS origins (comma-separated) |
 | `BASE_TEX_PATH` | No | `resume_base.tex` | Path to the base LaTeX template file |
 | `OUTPUT_DIR` | No | `output` | Directory for compiled PDF and LaTeX output |
+| `AUTH_USERNAME` | No | — | UI auth gate username (empty = auth disabled) |
+| `AUTH_PASSWORD` | No | — | UI auth gate password |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
 | `RATE_LIMIT_PER_MINUTE` | No | `10` | API rate limit per IP |
 | `NEXT_PUBLIC_API_URL` | No | `http://localhost:8001` | Frontend → backend URL (frontend `.env.local`) |
