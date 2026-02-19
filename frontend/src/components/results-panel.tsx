@@ -41,6 +41,7 @@ export function ResultsPanel({ result, companyName }: ResultsPanelProps) {
       {/* Download buttons */}
       <DownloadButton
         pdfB64={result.pdf_b64}
+        pdfError={result.pdf_error}
         texContent={result.tex_content}
         filename={result.filename}
         companyName={companyName}

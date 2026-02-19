@@ -153,6 +153,7 @@ async def _execute_pipeline(
     await _emit(5)
     pdf_url = ""
     pdf_b64 = ""
+    pdf_error = ""
     filename = ""
     try:
         pdf_filename, pdf_bytes = await asyncio.to_thread(
@@ -162,6 +163,7 @@ async def _execute_pipeline(
         pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
         filename = pdf_filename.rsplit(".", 1)[0]
     except RuntimeError as e:
+        pdf_error = str(e)
         logger.warning(f"PDF compilation skipped: {e}")
 
     elapsed_ms = int((time.time() - start) * 1000)
@@ -173,6 +175,7 @@ async def _execute_pipeline(
         reorder_plan=reorder_plan,
         pdf_url=pdf_url,
         pdf_b64=pdf_b64,
+        pdf_error=pdf_error,
         tex_content=tex_content,
         tex_diff=tex_diff,
         filename=filename,

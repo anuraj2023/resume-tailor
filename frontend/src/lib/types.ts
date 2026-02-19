@@ -41,6 +41,7 @@ export interface TailorResponse {
   reorder_plan: ReorderPlan;
   pdf_url: string;
   pdf_b64: string;
+  pdf_error: string;
   tex_content: string;
   tex_diff: string;
   filename: string;

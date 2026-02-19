@@ -75,6 +75,7 @@ class TailorResponse(BaseModel):
     reorder_plan: ReorderPlan
     pdf_url: str
     pdf_b64: str = ""
+    pdf_error: str = ""
     tex_content: str = ""
     tex_diff: str
     filename: str = ""

@@ -4,6 +4,7 @@ import JSZip from "jszip";
 
 interface DownloadButtonProps {
   pdfB64: string;
+  pdfError: string;
   texContent: string;
   filename: string;
   companyName?: string;
@@ -23,7 +24,7 @@ function b64ToBlob(b64: string, mime: string): Blob {
   return new Blob([buf], { type: mime });
 }
 
-export function DownloadButton({ pdfB64, texContent, filename, companyName }: DownloadButtonProps) {
+export function DownloadButton({ pdfB64, pdfError, texContent, filename, companyName }: DownloadButtonProps) {
   const hasPdf = pdfB64.length > 0;
   const hasTex = texContent.length > 0;
 
@@ -46,25 +47,32 @@ export function DownloadButton({ pdfB64, texContent, filename, companyName }: Do
   const btnBase = "inline-flex items-center gap-2 px-4 py-2.5 font-medium rounded-xl shadow-sm hover:shadow transition-all text-sm";
 
   return (
-    <div className="flex flex-wrap gap-3">
-      {hasPdf && (
-        <button onClick={downloadPdf} className={`${btnBase} bg-green-600 hover:bg-green-700 text-white`}>
-          <DownloadIcon />
-          PDF
-          {companyName && <span className="text-green-100">({companyName})</span>}
-        </button>
-      )}
-      {hasTex && (
-        <button onClick={downloadTex} className={`${btnBase} bg-blue-600 hover:bg-blue-700 text-white`}>
-          <DownloadIcon />
-          LaTeX
-        </button>
-      )}
-      {hasPdf && hasTex && (
-        <button onClick={downloadZip} className={`${btnBase} bg-purple-600 hover:bg-purple-700 text-white`}>
-          <ZipIcon />
-          ZIP
-        </button>
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-3">
+        {hasPdf && (
+          <button onClick={downloadPdf} className={`${btnBase} bg-green-600 hover:bg-green-700 text-white`}>
+            <DownloadIcon />
+            PDF
+            {companyName && <span className="text-green-100">({companyName})</span>}
+          </button>
+        )}
+        {hasTex && (
+          <button onClick={downloadTex} className={`${btnBase} bg-blue-600 hover:bg-blue-700 text-white`}>
+            <DownloadIcon />
+            LaTeX
+          </button>
+        )}
+        {hasPdf && hasTex && (
+          <button onClick={downloadZip} className={`${btnBase} bg-purple-600 hover:bg-purple-700 text-white`}>
+            <ZipIcon />
+            ZIP
+          </button>
+        )}
+      </div>
+      {!hasPdf && pdfError && (
+        <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          <span className="font-medium">PDF unavailable:</span> {pdfError}
+        </p>
       )}
     </div>
   );
