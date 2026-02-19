@@ -53,10 +53,11 @@ The frontend enforces these constraints before submitting to the backend:
 | JD text | Silently truncated at 4,000 chars | Backend truncates — frontend doesn't enforce |
 | Job title | Optional | Sent as empty string if not provided |
 | Company name | Optional | Sent as empty string if not provided |
+| Custom instructions | Optional | Passed to matcher LLM as `user_instructions` |
 
 ## Real-Time Pipeline Progress (SSE)
 
-While the backend processes the request (typically 15-20 seconds), the frontend shows **real-time** pipeline steps via Server-Sent Events:
+While the backend processes the request (first run ~30-60s, cached re-runs ~5s), the frontend shows **real-time** pipeline steps via Server-Sent Events:
 
 ```
 Analyzing resume... → Extracting keywords... → Matching skills... →
@@ -87,12 +88,17 @@ See `PIPELINE_STEPS` in [page.tsx](src/app/page.tsx), `tailorResumeStream` in [a
 │                               │  Project Order: chat_app → ...│
 │  Title: _______ Co: _______  │  Summary: "Backend Dev with..."│
 │                               │                               │
-│  [ Tailor Resume ]            │  [▸ LaTeX Diff]               │
-│                               │  [Download PDF]               │
+│  ┌─────────────────────────┐  │  [▸ LaTeX Diff]               │
+│  │ Custom instructions...  │  │  [Download PDF]               │
+│  └─────────────────────────┘  │                               │
+│                               │  ┌─────────────────────────┐  │
+│  [ Tailor Resume ]            │  │ Refine instructions...   │  │
+│                               │  └─────────────────────────┘  │
+│                               │  [ Refine ]                   │
 └───────────────────────────────┴───────────────────────────────┘
 ```
 
-Both inputs (file + JD) are required before the submit button activates.
+Both inputs (file + JD) are required before the submit button activates. After results appear, a refine input lets users iterate with new instructions — cached steps (0+1) are reused for ~5s turnaround.
 
 ## Tech Stack
 
@@ -114,8 +120,8 @@ frontend/
 │   │   └── globals.css           Tailwind imports
 │   │
 │   ├── components/
-│   │   ├── jd-input-panel.tsx    File upload + JD textarea + job title/company (memo'd)
-│   │   ├── results-panel.tsx     Composes all result sub-components
+│   │   ├── jd-input-panel.tsx    File upload + JD textarea + metadata + custom instructions (memo'd)
+│   │   ├── results-panel.tsx     Composes all result sub-components + refine flow
 │   │   ├── match-score.tsx       SVG circular progress ring (accessible)
 │   │   ├── keyword-chips.tsx     Matched/missing/injectable chips (semantic <ul>/<li>)
 │   │   ├── reorder-info.tsx      Skills order, project order, summary preview
@@ -158,6 +164,7 @@ Input panel with:
 - **File upload zone**: Drag-and-drop or click. Accepts `.tex` only. Shows filename + remove button when selected.
 - **JD textarea**: 50-character minimum. Character count shown.
 - **Job title / Company**: Optional metadata fields.
+- **Custom instructions** (optional): Textarea for user-provided tailoring instructions (e.g., "Add Docker to skills, emphasize backend experience"). Passed to the matcher LLM as `user_instructions`.
 - **Submit button**: Disabled until both file AND JD are provided. Shows spinner during loading.
 - **Tip**: "Don't have a .tex? Ask ChatGPT/Claude to convert your resume, or use Mathpix."
 
@@ -202,6 +209,17 @@ Three download options:
 - **LaTeX**: Raw `.tex` source file
 - **ZIP**: Combined PDF + LaTeX via JSZip
 
+Displays an amber warning banner when `pdf_error` is set (PDF compilation failed but other results are available).
+
+### `results-panel.tsx` — Refine Flow
+
+After initial results are displayed, a refine input appears at the bottom of the results panel:
+- **Text input**: For refinement instructions (e.g., "Move Python higher, add Kubernetes to skills")
+- **Refine button**: Re-submits the same form data through `/api/tailor-stream` with `user_instructions` set to the refinement text
+- **UX**: Current results stay visible during refinement (no flash of empty state). New results replace old ones when ready.
+
+Since Steps 0 (resume analysis) and 1 (JD extraction) are cached, refinement runs take ~5s instead of ~30s.
+
 ## API Client
 
 `lib/api.ts` provides two API functions:
@@ -217,6 +235,7 @@ Both share the same features:
 - **Timeout**: 2-minute timeout with deterministic detection (flag set before abort)
 - **Abort**: Caller can pass an `AbortSignal` for cancellation (forwarded to internal controller)
 - **Error handling**: Distinguishes timeout vs user cancellation vs network errors vs API errors
+- **Custom instructions**: Appends `user_instructions` to FormData when provided
 
 ## Testing
 

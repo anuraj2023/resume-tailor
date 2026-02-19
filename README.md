@@ -1,6 +1,6 @@
 # Resume Tailor
 
-JD-optimized PDF resume generator. Upload a LaTeX resume, paste a job description, get a tailored resume with skills reordered, keywords injected, and projects prioritized.
+JD-optimized PDF resume generator. Upload a LaTeX resume, paste a job description, get a tailored resume with skills reordered, keywords injected, and projects prioritized. Includes custom instructions, in-memory caching for fast re-runs, and a refine flow for iterative adjustments.
 
 **Core rule:** The system never adds skills the candidate doesn't have. It only reorders and emphasizes existing skills to match the JD.
 
@@ -29,16 +29,16 @@ User uploads .tex + pastes JD
      Step 5: Compile PDF             ← pdflatex
 ```
 
-| Step | Service | What | LLM? |
-|------|---------|------|------|
-| 0 | `resume_analyzer.py` | Insert comment markers into uploaded .tex, extract skills by category | Yes |
-| 1 | `extractor.py` | Parse JD into structured keywords (languages, backend, frontend, ai_llm, databases, devops) | Yes |
-| 2 | `matcher.py` | Semantically match JD keywords against resume skills (handles aliases, abbreviations, concept matching) | Yes |
-| 3 | `reorderer.py` | Sort skills categories by match count, prioritize projects by keyword overlap, generate tailored summary | No |
-| 4 | `injector.py` | Apply reorder plan to LaTeX, inject matched keywords, generate unified diff | No |
-| 5 | `compiler.py` | Compile modified .tex to PDF via pdflatex | No |
+| Step | Service | What | LLM? | Cached? |
+|------|---------|------|------|---------|
+| 0 | `resume_analyzer.py` + `parser.py` | Extract skills by category (LLM), then insert comment markers deterministically (regex) | Yes | Yes (SHA-256 of .tex) |
+| 1 | `extractor.py` | Parse JD into structured keywords (languages, backend, frontend, ai_llm, databases, devops) | Yes | Yes (SHA-256 of JD + title) |
+| 2 | `matcher.py` | Semantically match JD keywords against resume skills, with optional user instructions | Yes | No |
+| 3 | `reorderer.py` | Sort skills categories by match count, prioritize projects by keyword overlap, generate tailored summary | No | No |
+| 4 | `injector.py` | Apply reorder plan to LaTeX, inject matched keywords, generate unified diff | No | No |
+| 5 | `compiler.py` | Compile modified .tex to PDF via single-pass pdflatex | No | No |
 
-Steps 0 and 1 run in parallel since they analyze different documents (resume vs JD).
+Steps 0 and 1 run in parallel since they analyze different documents (resume vs JD). On re-runs with the same resume/JD, cached steps return instantly (~5s total vs ~30s first run).
 
 ## Architecture
 
@@ -55,17 +55,17 @@ resume-tailor/
 │   │   │   ├── langfuse_client.py   Prompt fetching + @observe tracing
 │   │   │   ├── llm.py              OpenAI + Gemini fallback client
 │   │   │   ├── logger.py           Structured logger with request_id
-│   │   │   └── fallback_prompts.py Embedded fallback for Langfuse-down
+│   │   │   └── fallback_prompts.py Embedded fallback for Langfuse-down (incl. user_instructions)
 │   │   ├── services/
-│   │   │   ├── resume_analyzer.py  Step 0: Analyze uploaded .tex
-│   │   │   ├── extractor.py        Step 1: LLM keyword extraction
-│   │   │   ├── matcher.py          Step 2: LLM semantic matching
+│   │   │   ├── resume_analyzer.py  Step 0: LLM skill extraction (cached by SHA-256)
+│   │   │   ├── extractor.py        Step 1: LLM keyword extraction (cached by SHA-256)
+│   │   │   ├── matcher.py          Step 2: LLM semantic matching (supports user_instructions)
 │   │   │   ├── reorderer.py        Step 3: Compute reorder plan
 │   │   │   ├── injector.py         Step 4: Modify LaTeX
 │   │   │   └── compiler.py         Step 5: pdflatex → PDF
 │   │   ├── latex/
-│   │   │   ├── parser.py           Parse .tex by comment markers
-│   │   │   └── writer.py           Write modified .tex sections
+│   │   │   ├── parser.py           Deterministic marker insertion + parse .tex sections
+│   │   │   └── writer.py           Write modified .tex sections + LaTeX escaping
 │   │   └── routes/
 │   │       ├── tailor.py            POST /api/tailor + /api/tailor-stream (SSE)
 │   │       └── health.py            GET /api/health (version + uptime)
@@ -87,8 +87,8 @@ resume-tailor/
 │       │   ├── layout.tsx           Inter font, OG meta, favicon
 │       │   └── page.tsx             Two-panel layout (input | results)
 │       ├── components/
-│       │   ├── jd-input-panel.tsx   File upload + JD textarea + metadata (memo'd)
-│       │   ├── results-panel.tsx    Composes all result components
+│       │   ├── jd-input-panel.tsx   File upload + JD textarea + metadata + custom instructions (memo'd)
+│       │   ├── results-panel.tsx    Composes all result components + refine flow
 │       │   ├── match-score.tsx      SVG circular progress ring
 │       │   ├── keyword-chips.tsx    Matched/missing/injectable chips
 │       │   ├── reorder-info.tsx     Skills order, project order, summary
@@ -125,6 +125,7 @@ resume-tailor/
 |----------|--------------------|
 | **Error Handling** | Request ID middleware (8-char UUID per request), global exception handlers, structured error responses with `request_id`, no stack trace leakage |
 | **Observability** | Structured JSON + colored console logging with request_id, Langfuse LLM tracing, health check with version + uptime |
+| **Caching** | In-memory SHA-256 caching for resume analysis (max 20) and JD extraction (max 50). Re-runs with same inputs skip LLM calls entirely |
 | **Resilience** | Embedded fallback prompts when Langfuse is down, OpenAI → Gemini LLM failover, graceful PDF compilation failure |
 | **Security** | CORS with explicit headers (`Content-Type`, `Authorization`, `X-Request-ID`), rate limiting (10 req/min per IP), content-type validation on uploads, input validation (size, encoding, length), frontend security headers (X-Frame-Options, X-Content-Type-Options, etc.) |
 | **Deployment** | Docker for both services (backend: non-root + HEALTHCHECK, frontend: multi-stage standalone), docker-compose orchestration, separated prod/dev requirements |
@@ -185,8 +186,8 @@ Open http://localhost:3001 — upload a .tex resume, paste a JD, click Tailor Re
 ### Docker Compose (alternative)
 
 ```bash
-# Set your API key
-export OPENAI_API_KEY=sk-...
+# Ensure backend/.env has your OPENAI_API_KEY set
+# docker-compose.yml uses env_file: ./backend/.env to load secrets
 
 # Start both services
 docker compose up --build
@@ -280,12 +281,13 @@ Detailed documentation is in the [docs/](docs/) directory:
 | Project order | Reorder by keyword overlap with JD | Backend JD → Django project moves up |
 | Summary first line | Generate from role title + top matched skills | "Backend Developer with expertise in Django, FastAPI" |
 | Experience emphasis | Highlight relevant keywords per entry | Zelthy entry → "Django, PostgreSQL" emphasized |
+| Custom instructions | User-provided text influences skill matching | "Add Docker to skills" → Docker prioritized in injectable set |
 
-**What never changes:** Experience bullets, company names, dates, achievements, project descriptions, LaTeX layout.
+**What never changes:** Experience bullets, company names, dates, achievements, project descriptions, LaTeX layout, section headers, formatting.
 
 ## LaTeX Marker System
 
-Step 0 (resume analyzer) inserts these comment markers into uploaded .tex files:
+Comment markers are inserted **deterministically** by `parser.py` using regex — not by the LLM. This preserves all original LaTeX formatting (section headers, custom commands, spacing). The LLM (Step 0) is only used to extract the candidate's skills.
 
 ```latex
 % SUMMARY_START

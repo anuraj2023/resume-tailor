@@ -143,6 +143,7 @@ Multipart form upload. Both `resume_file` and `jd_text` are required.
 | `jd_text` | string | Yes | Job description (min 50 chars) |
 | `job_title` | string | No | Job title (e.g., "Backend Developer") |
 | `company_name` | string | No | Company name (e.g., "Acme Corp") |
+| `user_instructions` | string | No | Custom instructions for tailoring (e.g., "Add Docker to skills, emphasize backend experience") |
 
 **curl example:**
 ```bash
@@ -150,7 +151,8 @@ curl -X POST http://localhost:8001/api/tailor \
   -F "resume_file=@my_resume.tex" \
   -F "jd_text=We are looking for a Backend Developer with Python..." \
   -F "job_title=Backend Developer" \
-  -F "company_name=Acme Corp"
+  -F "company_name=Acme Corp" \
+  -F "user_instructions=Emphasize backend and API experience"
 ```
 
 **Response:**
@@ -188,6 +190,7 @@ curl -X POST http://localhost:8001/api/tailor \
   "tex_content": "\\documentclass[a4paper,10pt]{article}... (full tailored LaTeX source)",
   "tex_diff": "--- original\n+++ tailored\n...",
   "filename": "Ravi_Raj_Acme_Corp_Backend_Developer_a1b2c3d4",
+  "pdf_error": "",
   "processing_time_ms": 50000
 }
 ```
@@ -242,7 +245,7 @@ data: {"detail": "Resume analysis failed", "step": 0}
 
 **Validation errors** (missing file, non-.tex, short JD) return normal HTTP responses (400/422), not SSE — the stream only opens after validation passes.
 
-**PDF compilation failure** is non-fatal: the `complete` event is still sent, but `pdf_url` and `pdf_b64` will be empty strings.
+**PDF compilation failure** is non-fatal: the `complete` event is still sent, but `pdf_url` and `pdf_b64` will be empty strings. The `pdf_error` field will contain the pdflatex error message for display in the UI.
 
 **Error responses** (before stream opens): Same as `/api/tailor` (400, 413, 422, 429).
 
@@ -273,16 +276,16 @@ backend/
 │   │   └── health.py        GET /api/health
 │   │
 │   ├── services/
-│   │   ├── resume_analyzer.py  Step 0: LLM inserts markers + extracts skills
-│   │   ├── extractor.py        Step 1: LLM extracts JD keywords
-│   │   ├── matcher.py          Step 2: LLM matches JD vs resume skills
+│   │   ├── resume_analyzer.py  Step 0: LLM extracts skills (cached by SHA-256)
+│   │   ├── extractor.py        Step 1: LLM extracts JD keywords (cached by SHA-256)
+│   │   ├── matcher.py          Step 2: LLM matches JD vs resume skills (+ user_instructions)
 │   │   ├── reorderer.py        Step 3: Compute reorder plan (deterministic)
 │   │   ├── injector.py         Step 4: Apply changes to LaTeX (deterministic)
-│   │   └── compiler.py         Step 5: pdflatex → PDF
+│   │   └── compiler.py         Step 5: single-pass pdflatex → PDF
 │   │
 │   └── latex/
-│       ├── parser.py        Parse marked .tex into section dict
-│       └── writer.py        Rewrite sections with new content
+│       ├── parser.py        Deterministic marker insertion + parse sections
+│       └── writer.py        Rewrite sections + LaTeX special char escaping
 │
 ├── tests/
 │   ├── conftest.py          Shared fixtures, rate limiter disable
@@ -307,14 +310,22 @@ backend/
 
 ## Pipeline Detail
 
-### Step 0: Resume Analysis (`resume_analyzer.py`)
+### Step 0: Resume Analysis (`resume_analyzer.py` + `parser.py`)
 
-Takes the raw uploaded .tex and:
-1. Identifies sections (summary, skills, experience, projects, education)
-2. Inserts comment markers (`% SUMMARY_START`, `% SKILL_CAT:backend`, `% PROJECT:name`, etc.)
-3. Converts skill lines to `\skillline{Category}{skills}` format
-4. Extracts all skills from the entire resume (skills section + experience bullets + project descriptions)
-5. Returns `ResumeAnalysis(marked_tex, skills, sections_found, person_name)`
+Two sub-steps:
+
+**0a. Skill extraction (LLM — cached by SHA-256 of .tex content, max 20 entries):**
+- Sends the .tex to GPT-4o-mini to extract skills by category
+- Returns `ResumeAnalysis(marked_tex, skills, sections_found, person_name)`
+- On cache hit (same resume uploaded again), skips the LLM call entirely
+
+**0b. Deterministic marker insertion (`parser.py` — no LLM):**
+- `insert_section_markers()` uses regex to add comment markers to the ORIGINAL .tex
+- Preserves ALL original LaTeX content — only inserts comment lines
+- Detects `\section{...}` commands and maps them to marker types (SUMMARY, SKILLS, EXPERIENCE, PROJECTS)
+- Adds sub-markers for skill categories (`% SKILL_CAT:backend`), experience entries (`% EXP:zelthy`), and projects (`% PROJECT:rag_engine`)
+
+This architecture ensures the original LaTeX formatting (section headers, custom commands, spacing) is never modified by the LLM.
 
 ### Step 1: JD Extraction (`extractor.py`)
 
@@ -324,6 +335,8 @@ Parses the job description into structured categories:
 
 Normalization: "React" → "React.js", "Postgres" → "PostgreSQL", etc.
 
+**Cached** by SHA-256 of `jd_text + job_title` (max 50 entries). Re-runs with the same JD skip the LLM call.
+
 ### Step 2: Matching (`matcher.py`)
 
 LLM-powered semantic matching — no alias tables. Handles:
@@ -331,6 +344,8 @@ LLM-powered semantic matching — no alias tables. Handles:
 - Alias match: "React" = "React.js"
 - Semantic match: "container orchestration" ≈ "Kubernetes"
 - Version match: "Python 3" = "Python"
+
+Accepts optional `user_instructions` (e.g., "Add Docker to skills", "Emphasize AI experience") which are passed to the LLM prompt to influence matching decisions.
 
 Produces three sets:
 - **matched**: JD keywords the candidate has
@@ -356,9 +371,12 @@ Applies the reorder plan to the marked .tex:
 
 ### Step 5: Compile (`compiler.py`)
 
-Writes modified .tex → runs `pdflatex` twice → cleans up aux files → returns PDF filename + bytes.
+Writes modified .tex → runs `pdflatex` once (single-pass — resumes don't need cross-references) → cleans up aux files → returns PDF filename + bytes.
 
-Auto-detects pdflatex on macOS (checks PATH first, then `/Library/TeX/texbin/pdflatex`). If pdflatex is not installed, logs a warning and returns empty `pdf_b64` — the rest of the response (match score, keywords, diff) still works.
+Additional features:
+- **`\skillline` auto-injection**: If the .tex uses `\skillline{}{}` but doesn't define the command, the compiler auto-injects `\newcommand{\skillline}[2]{\textbf{#1:} #2}` before `\begin{document}`
+- **Auto-detection**: Checks PATH first, then `/Library/TeX/texbin/pdflatex` (macOS BasicTeX fallback). If pdflatex is not installed, logs a warning and returns empty `pdf_b64` — the rest of the response still works
+- **Non-fatal failures**: PDF compilation errors are captured in the `pdf_error` response field rather than failing the entire request
 
 ## Langfuse
 
