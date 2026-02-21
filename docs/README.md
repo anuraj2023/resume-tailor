@@ -12,6 +12,7 @@ Detailed documentation for the Resume Tailor system.
 | [Testing](testing.md) | Test strategy, coverage enforcement, mocking patterns, test organization |
 | [Prompts](prompts.md) | Langfuse prompt management, fallback prompts, prompt push script |
 | [Troubleshooting](troubleshooting.md) | CORS errors, missing pdflatex, Langfuse down, SSE issues, common fixes |
+| [SSE Streaming](sse.md) | What SSE is, why we chose it, backend queue-bridge pattern, frontend stream consumer, 20 checks and balances |
 | [Design Decisions](design-decisions.md) | Why we chose each pattern: ASGI middleware, asyncio.Queue SSE, contextvars, LLM fallback, marker-based LaTeX, and more |
 
 ## Quick Reference
