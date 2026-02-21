@@ -5,6 +5,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Disable password gate before app import — load_dotenv won't override existing vars
+os.environ["AUTH_USERNAME"] = ""
+
 import pytest
 
 from app.main import app
