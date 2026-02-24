@@ -19,6 +19,13 @@ Resume Tailor is a two-service application: a **Python FastAPI backend** (port 8
               │ GPT-4o-   │ │ 2.0-flash │  │ (prompts  │
               │ mini      │ │ (fallback)│  │  + traces) │
               └──────────┘ └──────────┘  └──────────┘
+                                  │
+                                  ▼
+                           ┌──────────┐
+                           │PostgreSQL │
+                           │(Neon)     │
+                           │users table│
+                           └──────────┘
 ```
 
 **Key design decisions:**
@@ -46,6 +53,14 @@ Client (multipart: .tex file + JD text + metadata)
 ┌─ CORS Middleware ─────────────────────────────────────────┐
 │  Validate origin, set Access-Control-* headers            │
 │  expose_headers: ["X-Request-ID"]                         │
+└─────────────┬─────────────────────────────────────────────┘
+              │
+              ▼
+┌─ JWTAuthMiddleware (pure ASGI) ──────────────────────────┐
+│  Protects /api/tailor* only (skips health, auth, static)  │
+│  JWT mode: decode Bearer token → set user_id in state     │
+│  Env mode: check X-Auth-Username/Password headers         │
+│  Returns 401 JSON on invalid/missing credentials          │
 └─────────────┬─────────────────────────────────────────────┘
               │
               ▼
@@ -91,16 +106,19 @@ Client (multipart: .tex file + JD text + metadata)
 
 | Module | File | Responsibility |
 |--------|------|----------------|
-| **Entry point** | `main.py` | FastAPI app, middleware stack, exception handlers, static mount |
-| **Middleware** | `middleware.py` | Pure ASGI middleware — request ID generation via `contextvars.ContextVar`, injects `X-Request-ID` header |
+| **Entry point** | `main.py` | FastAPI app, lifespan (DB pool), middleware stack, exception handlers, static mount |
+| **Middleware** | `middleware.py` | Pure ASGI middleware — `RequestIdMiddleware` (8-char UUID) + `JWTAuthMiddleware` (JWT/env-auth for `/api/tailor*`) |
 | **Config** | `config.py` | Pydantic `BaseSettings` singleton, loads from `.env` |
+| **Auth** | `core/auth.py` | bcrypt password hashing (`hash_password`, `verify_password`) + JWT token creation/verification (`create_token`, `decode_token`) |
+| **Database** | `core/database.py` | asyncpg connection pool management (`create_pool`, `close_pool`) + `ensure_users_table` auto-migration |
 | **Constants** | `core/constants.py` | All magic numbers: upload limits, truncation lengths, timeouts |
 | **Logger** | `core/logger.py` | Structured JSON + colored console formatters with request_id |
 | **LLM Client** | `core/llm.py` | OpenAI primary + Gemini fallback, Langfuse-traced |
 | **Langfuse** | `core/langfuse_client.py` | Prompt fetching with 300s cache, `@observe` decorator |
 | **Fallback Prompts** | `core/fallback_prompts.py` | Embedded prompt copies for Langfuse-down scenarios |
 | **Models** | `models.py` | Pydantic schemas: `ExtractedKeywords`, `MatchResult`, `ResumeAnalysis`, `ReorderPlan` |
-| **Route: Health** | `routes/health.py` | `GET /api/health` — status, version, uptime |
+| **Route: Health** | `routes/health.py` | `GET /api/health` — status, version, uptime. `POST /api/auth/verify` — auth mode detection + token validation |
+| **Route: Auth** | `routes/auth.py` | `POST /api/auth/register` + `POST /api/auth/login` — user registration and login with JWT (only available when `DATABASE_URL` is set) |
 | **Route: Tailor** | `routes/tailor.py` | `POST /api/tailor` (JSON) + `POST /api/tailor-stream` (SSE) — shared 6-step pipeline |
 | **Step 0** | `services/resume_analyzer.py` | LLM: insert markers + extract skills from .tex |
 | **Step 1** | `services/extractor.py` | LLM: parse JD into structured keyword categories |
@@ -125,7 +143,7 @@ Client (multipart: .tex file + JD text + metadata)
 | **Diff View** | `components/diff-view.tsx` | Collapsible LaTeX diff viewer (memoized) |
 | **Download** | `components/download-button.tsx` | PDF / LaTeX / ZIP download |
 | **Error Boundary** | `components/error-boundary.tsx` | React error boundary |
-| **API Client** | `lib/api.ts` | SSE stream consumer (`tailorResumeStream`), legacy JSON client (`tailorResume`), timeout, abort |
+| **API Client** | `lib/api.ts` | SSE stream consumer (`tailorResumeStream`), legacy JSON client (`tailorResume`), auth functions (`authRegister`, `authLogin`), JWT/env-auth header injection, timeout, abort |
 | **Types** | `lib/types.ts` | TypeScript interfaces matching backend schemas |
 | **Utilities** | `lib/utils.ts` | `cn()`, `formatDuration()`, category labels |
 

@@ -46,11 +46,13 @@ Steps 0 and 1 run in parallel since they analyze different documents (resume vs 
 resume-tailor/
 ├── backend/               Python FastAPI (port 8001)
 │   ├── app/
-│   │   ├── main.py                  FastAPI app, middleware, exception handlers
-│   │   ├── middleware.py            Request ID + password gate middleware
+│   │   ├── main.py                  FastAPI app, lifespan, middleware, exception handlers
+│   │   ├── middleware.py            Request ID + JWT auth middleware (pure ASGI)
 │   │   ├── config.py                Pydantic settings from .env
 │   │   ├── models.py                Pydantic schemas + ResumeSections TypedDict
 │   │   ├── core/
+│   │   │   ├── auth.py             bcrypt password hashing + JWT token creation/verification
+│   │   │   ├── database.py         asyncpg connection pool + users table setup
 │   │   │   ├── constants.py         All magic numbers (limits, timeouts, sizes)
 │   │   │   ├── langfuse_client.py   Prompt fetching + @observe tracing
 │   │   │   ├── llm.py              OpenAI + Gemini fallback client
@@ -68,6 +70,7 @@ resume-tailor/
 │   │   │   └── writer.py           Write modified .tex sections + LaTeX escaping
 │   │   └── routes/
 │   │       ├── tailor.py            POST /api/tailor + /api/tailor-stream (SSE)
+│   │       ├── auth.py              POST /api/auth/register + /api/auth/login (JWT)
 │   │       └── health.py            GET /api/health + POST /api/auth/verify
 │   ├── tests/                       207 tests (pytest + pytest-asyncio)
 │   ├── scripts/
@@ -88,7 +91,7 @@ resume-tailor/
 │       │   └── page.tsx             Two-panel layout (input | results)
 │       ├── components/
 │       │   ├── jd-input-panel.tsx   File upload + JD textarea + metadata + custom instructions (memo'd)
-│       │   ├── password-gate.tsx    Login form (username + password, sessionStorage)
+│       │   ├── password-gate.tsx    Login/register form (JWT mode with localStorage, env-auth fallback)
 │       │   ├── results-panel.tsx    Composes all result components + refine flow
 │       │   ├── match-score.tsx      SVG circular progress ring
 │       │   ├── keyword-chips.tsx    Matched/missing/injectable chips
@@ -128,7 +131,7 @@ resume-tailor/
 | **Observability** | Structured JSON + colored console logging with request_id, Langfuse LLM tracing, health check with version + uptime |
 | **Caching** | In-memory SHA-256 caching for resume analysis (max 20) and JD extraction (max 50). Re-runs with same inputs skip LLM calls entirely |
 | **Resilience** | Embedded fallback prompts when Langfuse is down, OpenAI → Gemini LLM failover, graceful PDF compilation failure |
-| **Auth** | Optional username + password gate (env-configured). ASGI middleware protects `/api/tailor*` endpoints. Frontend stores credentials in `sessionStorage` with sign-out support |
+| **Auth** | JWT user authentication (register/login) with bcrypt password hashing and PostgreSQL-backed `users` table. Pure ASGI `JWTAuthMiddleware` protects `/api/tailor*` endpoints. Falls back to env-configured username/password when `DATABASE_URL` is not set. Frontend auto-detects auth mode |
 | **Security** | CORS with explicit headers (`Content-Type`, `Authorization`, `X-Request-ID`, `X-Auth-*`), rate limiting (10 req/min per IP), content-type validation on uploads, input validation (size, encoding, length), frontend security headers (X-Frame-Options, X-Content-Type-Options, etc.) |
 | **Deployment** | Docker for both services (backend: non-root + HEALTHCHECK, frontend: multi-stage standalone), docker-compose orchestration, separated prod/dev requirements |
 | **CI/CD** | GitHub Actions: backend tests + coverage (70% min), frontend tests + lint + build, Docker build |
@@ -160,8 +163,11 @@ All env vars are configured in `backend/.env`. Only `OPENAI_API_KEY` is required
 | `ALLOWED_ORIGINS` | No | `localhost:3000,3001` | CORS origins (comma-separated) |
 | `BASE_TEX_PATH` | No | `resume_base.tex` | Path to the base LaTeX template file |
 | `OUTPUT_DIR` | No | `output` | Directory for compiled PDF and LaTeX output |
-| `AUTH_USERNAME` | No | — | UI auth gate username (empty = auth disabled) |
-| `AUTH_PASSWORD` | No | — | UI auth gate password |
+| `DATABASE_URL` | No | — | PostgreSQL connection string. Enables JWT auth mode (register/login) |
+| `JWT_SECRET` | No | — | Secret key for JWT token signing. Required when `DATABASE_URL` is set |
+| `JWT_EXPIRY_HOURS` | No | `24` | JWT token lifetime in hours |
+| `AUTH_USERNAME` | No | — | Legacy env-auth username (fallback when `DATABASE_URL` is empty) |
+| `AUTH_PASSWORD` | No | — | Legacy env-auth password |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
 | `RATE_LIMIT_PER_MINUTE` | No | `10` | API rate limit per IP |
 | `NEXT_PUBLIC_API_URL` | No | `http://localhost:8001` | Frontend → backend URL (frontend `.env.local`) |

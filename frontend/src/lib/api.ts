@@ -5,10 +5,50 @@ const REQUEST_TIMEOUT_MS = 120_000; // 2 minutes
 
 function getAuthHeaders(): Record<string, string> {
   if (typeof window === "undefined") return {};
+  // JWT mode (preferred)
+  const token = localStorage.getItem("auth_token");
+  if (token) return { Authorization: `Bearer ${token}` };
+  // Fallback: env-based auth
   const username = sessionStorage.getItem("auth_username") || "";
   const password = sessionStorage.getItem("auth_password") || "";
   if (!username) return {};
   return { "X-Auth-Username": username, "X-Auth-Password": password };
+}
+
+// ---------------------------------------------------------------------------
+// Auth API
+// ---------------------------------------------------------------------------
+
+export async function authRegister(
+  username: string,
+  password: string,
+): Promise<{ token: string; username: string }> {
+  const response = await fetch(`${API_BASE}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: "Registration failed" }));
+    throw new Error(err.detail || `Error: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function authLogin(
+  username: string,
+  password: string,
+): Promise<{ token: string; username: string }> {
+  const response = await fetch(`${API_BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: "Login failed" }));
+    throw new Error(err.detail || `Error: ${response.status}`);
+  }
+  return response.json();
 }
 
 // ---------------------------------------------------------------------------

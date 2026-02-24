@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     auth_username: str = ""
     auth_password: str = ""
+    database_url: str = ""
+    jwt_secret: str = ""
+    jwt_expiry_hours: int = 24
 
     model_config = SettingsConfigDict(
         env_file=".env",

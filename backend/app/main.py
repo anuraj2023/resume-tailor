@@ -5,6 +5,7 @@ Docs: http://localhost:8001/docs
 """
 
 import traceback
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -22,7 +23,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from app.config import load_settings  # noqa: E402
 from app.core.constants import RATE_LIMIT_PER_MINUTE  # noqa: E402
 from app.core.logger import logger  # noqa: E402
-from app.middleware import RequestIdMiddleware, PasswordGateMiddleware, request_id_var  # noqa: E402
+from app.middleware import RequestIdMiddleware, JWTAuthMiddleware, request_id_var  # noqa: E402
 from app.routes import tailor, health  # noqa: E402
 
 settings = load_settings()
@@ -30,10 +31,27 @@ settings = load_settings()
 # Rate limiter
 limiter = Limiter(key_func=get_remote_address)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: create DB pool + users table. Shutdown: close pool."""
+    if settings.database_url:
+        from app.core.database import create_pool, ensure_users_table, close_pool
+        pool = await create_pool(settings.database_url)
+        await ensure_users_table(pool)
+        app.state.pool = pool
+        logger.info("Database pool initialized")
+    yield
+    if hasattr(app.state, "pool"):
+        from app.core.database import close_pool
+        await close_pool(app.state.pool)
+
+
 app = FastAPI(
     title="Resume Tailor API",
     version="1.0.0",
     description="Generates JD-tailored PDF resumes using LLM extraction + LaTeX compilation.",
+    lifespan=lifespan,
 )
 
 app.state.limiter = limiter
@@ -50,7 +68,8 @@ app.add_middleware(
 
 # Auth middleware (runs after CORS, before route handlers)
 app.add_middleware(
-    PasswordGateMiddleware,
+    JWTAuthMiddleware,
+    jwt_secret=settings.jwt_secret,
     username=settings.auth_username,
     password=settings.auth_password,
 )
@@ -87,3 +106,8 @@ app.mount("/output", StaticFiles(directory=str(output_dir)), name="output")
 
 app.include_router(health.router)
 app.include_router(tailor.router)
+
+# Register auth routes only when DB is configured
+if settings.database_url:
+    from app.routes import auth  # noqa: E402
+    app.include_router(auth.router)

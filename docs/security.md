@@ -2,7 +2,77 @@
 
 ## Overview
 
-Security is implemented at multiple layers: **input validation** at the API boundary, **CORS + rate limiting** at the middleware layer, **security headers** on the frontend, and **Docker hardening** for deployment.
+Security is implemented at multiple layers: **authentication** (JWT + bcrypt), **input validation** at the API boundary, **CORS + rate limiting** at the middleware layer, **security headers** on the frontend, and **Docker hardening** for deployment.
+
+---
+
+## Authentication
+
+The API supports two auth modes, selected automatically based on configuration:
+
+### JWT Mode (Database-backed)
+
+**Activated when:** `DATABASE_URL` and `JWT_SECRET` are set in `.env`
+
+**Files:** `backend/app/core/auth.py`, `backend/app/core/database.py`, `backend/app/routes/auth.py`, `backend/app/middleware.py`
+
+User accounts are stored in the `users` table in PostgreSQL (Neon). Passwords are hashed with **bcrypt** and sessions use **JWT tokens** (HS256).
+
+**Database schema:**
+```sql
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+**Endpoints (public — no auth required):**
+
+| Method | Endpoint | Request Body | Response |
+|--------|----------|-------------|----------|
+| `POST` | `/api/auth/register` | `{"username": "...", "password": "..."}` | `{"token": "jwt...", "username": "..."}` |
+| `POST` | `/api/auth/login` | `{"username": "...", "password": "..."}` | `{"token": "jwt...", "username": "..."}` |
+| `POST` | `/api/auth/verify` | — (reads `Authorization` header) | `{"valid": bool, "auth_enabled": true, "mode": "jwt"}` |
+
+**Validation:** Register requires username 3-100 chars, password 8-128 chars.
+
+**Auth flow:**
+```
+Register:  password → bcrypt.hashpw() → stored in users table → JWT returned
+Login:     password → bcrypt.checkpw() against stored hash → JWT returned
+Token:     jwt.encode({sub: user_id, username, iat, exp}, JWT_SECRET, HS256)
+```
+
+**Middleware:** `JWTAuthMiddleware` (pure ASGI — not `BaseHTTPMiddleware`) protects `/api/tailor*` endpoints. Extracts `Authorization: Bearer <token>`, decodes JWT, sets `user_id` and `username` in request state. Returns 401 on invalid/missing token.
+
+**Frontend:** The login/register form auto-detects JWT mode via `/api/auth/verify`. On success, stores `auth_token` in `localStorage`. All API requests include `Authorization: Bearer <token>`.
+
+### Env Mode (Legacy fallback)
+
+**Activated when:** `DATABASE_URL` is empty, `AUTH_USERNAME` is set
+
+Single shared username/password configured in `.env`. The middleware checks `X-Auth-Username` and `X-Auth-Password` headers against the env values. Frontend stores credentials in `sessionStorage`.
+
+### No Auth
+
+**Activated when:** Both `DATABASE_URL` and `AUTH_USERNAME` are empty
+
+All requests pass through without authentication. Suitable for local development.
+
+### Configuration
+
+```bash
+# JWT mode (recommended):
+DATABASE_URL=postgresql://user:pass@host/resume_tailor?sslmode=require
+JWT_SECRET=your-64-char-random-secret
+JWT_EXPIRY_HOURS=24
+
+# Env mode (legacy fallback):
+AUTH_USERNAME=your-username
+AUTH_PASSWORD=your-password
+```
 
 ---
 
@@ -165,6 +235,11 @@ class Settings(BaseSettings):
     google_ai_api_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_public_key: str = ""
+    auth_username: str = ""        # legacy env-auth
+    auth_password: str = ""        # legacy env-auth
+    database_url: str = ""         # PostgreSQL (enables JWT mode)
+    jwt_secret: str = ""           # JWT signing key
+    jwt_expiry_hours: int = 24     # token lifetime
     # ... other settings
 ```
 

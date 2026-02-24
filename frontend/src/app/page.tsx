@@ -38,15 +38,23 @@ export default function Home() {
   // Check for existing session on mount
   useEffect(() => {
     const checkAuth = async () => {
-      const username = sessionStorage.getItem("auth_username") || "";
-      const password = sessionStorage.getItem("auth_password") || "";
+      // Build headers — prefer JWT, fallback to env-auth
+      const headers: Record<string, string> = {};
+      const token = localStorage.getItem("auth_token");
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      } else {
+        const username = sessionStorage.getItem("auth_username") || "";
+        const password = sessionStorage.getItem("auth_password") || "";
+        if (username) {
+          headers["X-Auth-Username"] = username;
+          headers["X-Auth-Password"] = password;
+        }
+      }
       try {
         const res = await fetch(`${API_BASE}/api/auth/verify`, {
           method: "POST",
-          headers: {
-            "X-Auth-Username": username,
-            "X-Auth-Password": password,
-          },
+          headers,
         });
         const data = await res.json();
         if (!data.auth_enabled || data.valid) {
@@ -140,6 +148,8 @@ export default function Home() {
   }, []);
 
   const handleLogout = useCallback(() => {
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_username");
     sessionStorage.removeItem("auth_username");
     sessionStorage.removeItem("auth_password");
     setAuthenticated(false);
@@ -171,7 +181,7 @@ export default function Home() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-gray-400">LLM + LaTeX powered</span>
-          {sessionStorage.getItem("auth_username") && (
+          {(localStorage.getItem("auth_token") || sessionStorage.getItem("auth_username")) && (
             <button
               onClick={handleLogout}
               className="text-xs text-gray-400 hover:text-red-500 transition-colors"
